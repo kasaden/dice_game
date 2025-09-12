@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Dice — Démo (style Duel)</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">D</div>
+      <div>
+        <h1>Dice game</h1>
+        <div class="muted">Provably-fair, edge paramétrable, manuel & auto-bet — full client-side.</div>
+      </div>
+    </header>
+
+    <!-- Wallet Section -->
+    <section class="card wallet-section">
+      <h2>💳 Portefeuille</h2>
+      <div class="body">
+        <div class="wallet-balance">
+          <div class="balance-display">
+            <span class="balance-label">Solde actuel</span>
+            <span class="balance-amount" id="wallet-balance">1000.00</span>
+            <span class="balance-unit">USDC</span>
+          </div>
+        </div>
+        
+        <div class="row two">
+          <div class="field">
+            <label for="deposit-amount">Montant</label>
+            <div class="input"><input id="deposit-amount" type="number" min="0" step="0.01" value="100.00"><span class="unit">USDC</span></div>
+          </div>
+          <div class="field">
+            <div class="flex" style="margin-top:24px">
+              <button class="btn secondary grow" id="btn-deposit">💰 Deposit</button>
+              <button class="btn danger grow" id="btn-withdraw">💸 Withdraw</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <!-- LEFT: Game -->
+      <section class="card" id="game">
+        <h2>Table de jeu</h2>
+        <div class="body">
+          <div class="seg" role="tablist" aria-label="Choix du sens">
+            <button id="btn-under" class="active" aria-selected="true">Roll <span class="badge">UNDER</span></button>
+            <button id="btn-over">Roll <span class="badge">OVER</span></button>
+          </div>
+
+          <!-- Slider -->
+          <div class="track" id="track" aria-label="Seuil de victoire">
+            <div class="bar" id="bar" style="--loss-pct:50%"></div>
+            <div class="handle" id="handle">✕</div>
+          </div>
+          <div class="tiny">Tirages uniformes 0 → 100 (2 décimales). Le vert = zone gagnante.</div>
+
+          <!-- I/O row -->
+          <div class="row">
+            <div class="field">
+              <label for="multiplier">Multiplier</label>
+              <div class="input"><input id="multiplier" type="number" min="1.0001" step="0.0001" value="1.9980"><span class="unit">×</span></div>
+            </div>
+            <div class="field">
+              <label for="roll">Seuil (Roll <span id="over-under-label">Under</span>)</label>
+              <div class="input"><input id="roll" type="number" min="0" max="100" step="0.01" value="50.00"><span class="unit">/ 100</span></div>
+            </div>
+            <div class="field">
+              <label for="chance">Win Chance</label>
+              <div class="input"><input id="chance" type="number" min="0.01" max="98" step="0.01" value="50.00"><span class="unit">%</span></div>
+            </div>
+          </div>
+
+          <div class="row two">
+            <div class="field">
+              <label for="edge">House Edge</label>
+              <div class="input"><input id="edge" type="number" min="0" max="5" step="0.01" value="0.10"><span class="unit">%</span></div>
+              <div class="help">Le multiplicateur est calculé: <span class="kbd">(1 − edge) / p</span>. Ex.: edge 0,10 % & p 49,95 % ⇒ 2,000×</div>
+            </div>
+
+            <div class="field">
+              <label>Seeds (Provably fair)</label>
+              <div class="grid-2">
+                <div class="input"><input id="server-seed" placeholder="Server seed (secret) - ex: 6f1..." /></div>
+                <div class="input"><input id="client-seed" placeholder="Client seed - ex: my-wallet" /></div>
+              </div>
+              <div class="flex">
+                <div class="input grow"><input id="nonce" type="number" min="0" value="0"><span class="unit">nonce</span></div>
+                <button class="btn secondary" id="btn-new-seeds" title="Générer">Générer</button>
+                <button class="btn secondary" id="btn-hash" title="Hashez le server seed">Hash</button>
+              </div>
+              <div class="help">Le tirage est <b>HMAC-SHA256(server, client:nonce:cursor)</b> → roll 0–100. Le hash du server seed peut être publié à l’avance.</div>
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid var(--stroke);margin:16px 0">
+
+          <div class="row two">
+            <div class="field">
+              <label for="bet">Mise</label>
+              <div class="input"><input id="bet" type="number" min="0" step="0.01" value="1.00"><span class="unit">USDC</span></div>
+            </div>
+            <div class="field">
+              <label>Profit si win</label>
+              <div class="input"><input id="profit" type="text" disabled value="0.00"><span class="unit">USDC</span></div>
+            </div>
+          </div>
+
+          <div class="flex" style="margin-top:12px">
+            <button class="btn grow" id="btn-roll">Roll Dice</button>
+            <button class="btn secondary" id="btn-clear">Reset</button>
+          </div>
+
+          <div class="stats">
+            <div class="stat"><b id="stat-last">—</b><span class="tiny">Dernier roll</span></div>
+            <div class="stat"><b id="stat-winloss">0 / 0</b><span class="tiny">Wins / Losses</span></div>
+            <div class="stat"><b id="stat-total">0</b><span class="tiny">Total bets</span></div>
+            <div class="stat"><b id="stat-balance">0.00</b><span class="tiny">P/L total (USDC)</span></div>
+          </div>
+
+          <div class="stats">
+            <div class="stat"><b id="stat-highest">1000.00</b><span class="tiny">Balance max</span></div>
+            <div class="stat"><b id="stat-lowest">1000.00</b><span class="tiny">Balance min</span></div>
+            <div class="stat"><b id="stat-max-wins">0</b><span class="tiny">Max wins d'affilée</span></div>
+            <div class="stat"><b id="stat-max-losses">0</b><span class="tiny">Max losses d'affilée</span></div>
+          </div>
+
+          <div class="footer">Astuce : déplace le curseur (ou tape les champs). Les trois valeurs se synchronisent automatiquement.</div>
+        </div>
+      </section>
+
+      <!-- RIGHT: Autobetter + console -->
+      <section class="card" id="auto">
+        <h2>Auto-bet</h2>
+        <div class="body vstack">
+          <div class="row two">
+            <div class="field">
+              <label for="auto-bet">Bet Amount</label>
+              <div class="input"><input id="auto-bet" type="number" min="0" step="0.01" value="0.10"><span class="unit">USDC</span></div>
+            </div>
+            <div class="field">
+              <label for="auto-count">Number of Bets</label>
+              <div class="input"><input id="auto-count" type="number" min="0" step="1" value="0"><span class="unit">∞</span></div>
+            </div>
+          </div>
+
+          <div class="row two">
+            <div class="field">
+              <label>On Win</label>
+              <div class="input">
+                <select id="onwin-mode">
+                  <option value="reset">Reset</option>
+                  <option value="increase">Increase by</option>
+                </select>
+                <input id="onwin-pct" type="number" min="0" max="1000" step="0.1" value="0"><span class="unit">%</span>
+              </div>
+            </div>
+            <div class="field">
+              <label>On Loss</label>
+              <div class="input">
+                <select id="onloss-mode">
+                  <option value="reset">Reset</option>
+                  <option value="increase">Increase by</option>
+                </select>
+                <input id="onloss-pct" type="number" min="0" max="1000" step="0.1" value="0"><span class="unit">%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="row two">
+            <div class="field">
+              <label for="stop-profit">Stop on Profit</label>
+              <div class="input"><input id="stop-profit" type="number" step="0.01" value="0.00"><span class="unit">USDC</span></div>
+            </div>
+            <div class="field">
+              <label for="stop-loss">Stop on Loss</label>
+              <div class="input"><input id="stop-loss" type="number" step="0.01" value="0.00"><span class="unit">USDC</span></div>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="speed">Vitesse Auto-bet</label>
+              <div class="input">
+                <select id="speed">
+                  <option value="1000"> 1s</option>
+                  <option value="500"> 0.5s</option>
+                  <option value="250" selected> 0.25s</option>
+                  <option value="100"> 0.1s</option>
+                  <option value="50"> 0.05s</option>
+                  <option value="10"> 0.01s</option>
+                  <option value="1"> 0.001s</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex">
+            <button class="btn grow" id="btn-start">Start Autobettor</button>
+            <button class="btn secondary" id="btn-stop" disabled>Stop</button>
+          </div>
+
+          <div class="chip">
+            <b>Provably-fair</b> <span class="tiny">— Chaque roll utilise vos seeds/nonce actuels (+ curseur).</span>
+          </div>
+
+          <div class="console" id="console" aria-live="polite"></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:20px">
+      <h2>Notes & API</h2>
+      <div class="body">
+        <ul>
+          <li>Edge par défaut : <b>0,10 %</b> (modifiable). À p=50 %, payout ≈ 1.998× ; à p=49,95 %, payout = 2.000×.</li>
+          <li>Le multiplicateur affiché inclut la mise (style casinos crypto). <i>Profit = mise × (multiplier − 1)</i>.</li>
+          <li>Le tirage reprend l’algo “<span class="kbd">HMAC-SHA256</span> → roll 0–100” courant (façon Primedice/Crash). 100 % client-side.</li>
+        </ul>
+        <div class="help">Ceci est une démo éducative. Les casinos en ligne sont restreints dans plusieurs pays ; joue de façon responsable.</div>
+      </div>
+    </section>
+  </div>
+
+<script src="script.js"></script>
+</body>
+</html>
