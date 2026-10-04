@@ -3,6 +3,24 @@ const $ = (s, d = document) => d.querySelector(s);
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const to2 = (x) => (Math.round(x * 100) / 100).toFixed(2);
 const to4 = (x) => (Math.round(x * 10000) / 10000).toFixed(4);
+const money = (x) =>
+  (Math.round(x * 100) / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+// Accept "1.5" and "1,5" alike
+const num = (v) => parseFloat(String(v).replace(",", ".")) || 0;
+const signed = (x) => (x >= 0 ? "+" : "−") + money(Math.abs(x));
+
+// Never rewrite the field the visitor is typing in; it is reformatted on blur
+function setVal(sel, v) {
+  const el = $(sel);
+  if (document.activeElement !== el) el.value = v;
+}
+
+const MIN_CHANCE = 0.01;
+const MAX_CHANCE = 98;
+const HISTORY_LIMIT = 200;
 
 let state = {
   over: false, // false = under
@@ -30,67 +48,98 @@ let state = {
   maxLossStreak: 0,
 };
 
+/* ---------- Status messages (replace alert()) ---------- */
+const statusTimers = {};
+function setStatus(id, msg, tone = "") {
+  const el = $("#" + id);
+  el.textContent = msg;
+  if (tone) el.dataset.tone = tone;
+  else delete el.dataset.tone;
+  clearTimeout(statusTimers[id]);
+  if (msg && tone !== "error") {
+    statusTimers[id] = setTimeout(() => setStatus(id, ""), 4000);
+  }
+}
+
 /* ---------- Sync visuals ---------- */
 function updateBar() {
-  const lossPct = state.over ? state.roll : 100 - state.roll;
-  $("#bar").style.setProperty("--loss-pct", to2(lossPct) + "%");
-  const trackRect = $("#track").getBoundingClientRect();
-  const handle = $("#handle");
-  handle.style.left = 2 + (state.roll / 100) * (trackRect.width - 4) + "px";
-  $("#over-under-label").textContent = state.over ? "Over" : "Under";
-  const bet = parseFloat($("#bet").value || 0);
+  const range = $("#roll-range");
+  range.value = state.roll;
+  range.setAttribute(
+    "aria-valuetext",
+    `Roll ${state.over ? "over" : "under"} ${to2(state.roll)}, ${to2(state.chance)} % chance`
+  );
+  $("#bar").style.setProperty("--split", to2(state.roll) + "%");
+  $("#track").classList.toggle("is-over", state.over);
+  $("#over-under-label").textContent = state.over ? "over" : "under";
+
+  const bet = num($("#bet").value);
   const profit = bet * (state.multiplier - 1);
   $("#profit").value = to2(profit);
+
+  if ($("#result").dataset.state === "idle") {
+    // Idle: the big numeral shows the target until the first roll
+    $("#stat-last").textContent = to2(state.roll);
+    $("#result-detail").textContent = `Roll ${state.over ? "over" : "under"} ${to2(state.roll)} to win ${money(profit)} USDC`;
+  }
 }
 
 function syncFromChance() {
-  const p = clamp(state.chance, 0.01, 98) / 100;
+  state.chance = clamp(state.chance, MIN_CHANCE, MAX_CHANCE);
+  const p = state.chance / 100;
   const edge = clamp(state.edgePct, 0, 10) / 100;
   state.multiplier = (1 - edge) / p;
   state.roll = state.over ? 100 - p * 100 : p * 100;
-  $("#chance").value = to2(state.chance);
-  $("#multiplier").value = to4(state.multiplier);
-  $("#roll").value = to2(state.roll);
+  setVal("#chance", to2(state.chance));
+  setVal("#multiplier", to4(state.multiplier));
+  setVal("#roll", to2(state.roll));
   updateBar();
 }
 
 function syncFromMultiplier() {
   const edge = clamp(state.edgePct, 0, 10) / 100;
   const p = (1 - edge) / clamp(state.multiplier, 1.0001, 1e9);
-  state.chance = clamp(p * 100, 0.01, 98);
+  state.chance = clamp(p * 100, MIN_CHANCE, MAX_CHANCE);
   state.roll = state.over ? 100 - state.chance : state.chance;
-  $("#chance").value = to2(state.chance);
-  $("#multiplier").value = to4(state.multiplier);
-  $("#roll").value = to2(state.roll);
+  setVal("#chance", to2(state.chance));
+  setVal("#multiplier", to4(state.multiplier));
+  setVal("#roll", to2(state.roll));
   updateBar();
 }
 
 function syncFromRoll() {
-  const p = state.over
-    ? (100 - clamp(state.roll, 0, 100)) / 100
-    : clamp(state.roll, 0, 100) / 100;
+  // Keep the win chance inside its allowed range
+  state.roll = state.over
+    ? clamp(state.roll, 100 - MAX_CHANCE, 100 - MIN_CHANCE)
+    : clamp(state.roll, MIN_CHANCE, MAX_CHANCE);
+  const p = state.over ? (100 - state.roll) / 100 : state.roll / 100;
   state.chance = p * 100;
   const edge = clamp(state.edgePct, 0, 10) / 100;
   state.multiplier = (1 - edge) / p;
-  $("#chance").value = to2(state.chance);
-  $("#multiplier").value = to4(state.multiplier);
-  $("#roll").value = to2(state.roll);
+  setVal("#chance", to2(state.chance));
+  setVal("#multiplier", to4(state.multiplier));
+  setVal("#roll", to2(state.roll));
   updateBar();
 }
 
 function syncFromEdge() {
   const edge = clamp(state.edgePct, 0, 10) / 100;
-  const p = clamp(state.chance, 0.01, 98) / 100;
+  const p = clamp(state.chance, MIN_CHANCE, MAX_CHANCE) / 100;
   state.multiplier = (1 - edge) / p;
-  $("#multiplier").value = to4(state.multiplier);
+  setVal("#multiplier", to4(state.multiplier));
   updateBar();
 }
 
 /* ---------- Wallet functions ---------- */
+function setSigned(el, value) {
+  el.textContent = signed(value);
+  el.dataset.sign = value > 0 ? "pos" : value < 0 ? "neg" : "";
+}
+
 function updateWalletDisplay() {
-  $("#wallet-balance").textContent = to2(state.walletBalance);
-  $("#stat-highest").textContent = to2(state.highestBalance);
-  $("#stat-lowest").textContent = to2(state.lowestBalance);
+  $("#wallet-balance").textContent = money(state.walletBalance);
+  $("#stat-highest").textContent = money(state.highestBalance);
+  $("#stat-lowest").textContent = money(state.lowestBalance);
   $("#stat-max-wins").textContent = state.maxWinStreak;
   $("#stat-max-losses").textContent = state.maxLossStreak;
 }
@@ -110,30 +159,36 @@ function updateWalletBalance(amount) {
 }
 
 function deposit() {
-  const amount = parseFloat($("#deposit-amount").value || 0);
-  if (amount <= 0) {
-    alert("Montant invalide pour le dépôt");
+  const amount = num($("#deposit-amount").value);
+  if (!(amount > 0)) {
+    setStatus("cashier-status", "Enter an amount above 0 to deposit.", "error");
     return;
   }
 
   updateWalletBalance(amount);
-  log(`💰 Dépôt de ${to2(amount)} USDC effectué`);
+  setStatus("cashier-status", `Deposited ${money(amount)} USDC.`, "ok");
+  logNote(`Deposit +${money(amount)} USDC`);
 }
 
 function withdraw() {
-  const amount = parseFloat($("#deposit-amount").value || 0);
-  if (amount <= 0) {
-    alert("Montant invalide pour le retrait");
+  const amount = num($("#deposit-amount").value);
+  if (!(amount > 0)) {
+    setStatus("cashier-status", "Enter an amount above 0 to withdraw.", "error");
     return;
   }
 
   if (amount > state.walletBalance) {
-    alert("Solde insuffisant pour ce retrait");
+    setStatus(
+      "cashier-status",
+      `You can withdraw up to ${money(state.walletBalance)} USDC.`,
+      "error"
+    );
     return;
   }
 
   updateWalletBalance(-amount);
-  log(`💸 Retrait de ${to2(amount)} USDC effectué`);
+  setStatus("cashier-status", `Withdrew ${money(amount)} USDC.`, "ok");
+  logNote(`Withdrawal −${money(amount)} USDC`);
 }
 
 function updateWinLossStreaks(isWin) {
@@ -153,62 +208,44 @@ function updateWinLossStreaks(isWin) {
   updateWalletDisplay();
 }
 
-/* ---------- Draggable handle ---------- */
-(function () {
-  const track = $("#track");
-  const handle = $("#handle");
-  let dragging = false;
-  function setFromClientX(clientX) {
-    const rect = track.getBoundingClientRect();
-    let pct = clamp((clientX - rect.left) / rect.width, 0, 1);
-    state.roll = +(pct * 100).toFixed(2);
-    syncFromRoll();
-  }
-  handle.addEventListener("mousedown", (e) => {
-    dragging = true;
-    handle.style.cursor = "grabbing";
-    e.preventDefault();
-  });
-  window.addEventListener("mouseup", () => {
-    dragging = false;
-    handle.style.cursor = "grab";
-  });
-  window.addEventListener("mousemove", (e) => {
-    if (dragging) setFromClientX(e.clientX);
-  });
-  track.addEventListener("click", (e) => setFromClientX(e.clientX));
-})();
+/* ---------- Rail (native range input) ---------- */
+$("#roll-range").addEventListener("input", (e) => {
+  state.roll = +(+e.target.value).toFixed(2);
+  syncFromRoll();
+});
 
 /* ---------- Inputs ---------- */
 $("#chance").addEventListener("input", (e) => {
-  state.chance = +e.target.value;
+  state.chance = num(e.target.value);
   syncFromChance();
 });
 $("#multiplier").addEventListener("input", (e) => {
-  state.multiplier = +e.target.value;
+  state.multiplier = num(e.target.value);
   syncFromMultiplier();
 });
 $("#roll").addEventListener("input", (e) => {
-  state.roll = +e.target.value;
+  state.roll = num(e.target.value);
   syncFromRoll();
 });
 $("#edge").addEventListener("input", (e) => {
-  state.edgePct = +e.target.value;
+  state.edgePct = num(e.target.value);
   syncFromEdge();
 });
-$("#bet").addEventListener("input", updateBar);
+// Reformat the synced fields once the visitor leaves them
+["chance", "multiplier", "roll"].forEach((id) =>
+  $("#" + id).addEventListener("blur", () => setTimeout(syncFromChance))
+);
 
-$("#btn-under").addEventListener("click", () => {
-  state.over = false;
-  $("#btn-under").classList.add("active");
-  $("#btn-over").classList.remove("active");
-  syncFromChance(); // Use syncFromChance to maintain same probability
+$("#bet").addEventListener("input", () => {
+  setStatus("table-status", "");
+  updateBar();
 });
-$("#btn-over").addEventListener("click", () => {
-  state.over = true;
-  $("#btn-over").classList.add("active");
-  $("#btn-under").classList.remove("active");
-  syncFromChance(); // Use syncFromChance to maintain same probability
+
+document.querySelectorAll('input[name="direction"]').forEach((radio) => {
+  radio.addEventListener("change", () => {
+    state.over = radio.value === "over";
+    syncFromChance(); // keep the same probability
+  });
 });
 
 /* ---------- Provably fair: HMAC-SHA256 ---------- */
@@ -271,9 +308,14 @@ function generateNewSeeds() {
   state.clientSeed = $("#client-seed").value;
   state.nonce = 0;
   state.cursor = 0;
+  $("#nonce").value = 0;
+  $("#seed-hash").textContent = "Press “Hash server seed” to publish it.";
 }
 
-$("#btn-new-seeds").addEventListener("click", generateNewSeeds);
+$("#btn-new-seeds").addEventListener("click", () => {
+  generateNewSeeds();
+  logNote("New seeds drawn");
+});
 
 $("#btn-hash").addEventListener("click", async () => {
   const hash = await crypto.subtle.digest(
@@ -283,68 +325,144 @@ $("#btn-hash").addEventListener("click", async () => {
   const hex = [...new Uint8Array(hash)]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  log(`Server seed hash: ${hex}`);
+  $("#seed-hash").textContent = hex;
+  logNote(`Server seed hash ${hex}`);
 });
 
 ["server-seed", "client-seed", "nonce"].forEach((id) => {
   $("#" + id).addEventListener("input", (e) => {
-    if (id === "nonce") state.nonce = +e.target.value || 0;
-    else state[id.replace("-", "")] = e.target.value;
+    if (id === "nonce") state.nonce = Math.max(0, Math.floor(num(e.target.value)));
+    else state[id.replace("-s", "S")] = e.target.value;
   });
 });
+
+/* ---------- History ---------- */
+function trimHistory() {
+  const body = $("#history-body");
+  while (body.rows.length > HISTORY_LIMIT) body.deleteRow(-1);
+  $("#history-empty").hidden = body.rows.length > 0;
+}
+
+function addRow(cells, cls) {
+  const body = $("#history-body");
+  const tr = body.insertRow(0);
+  if (cls) tr.className = cls;
+  cells.forEach(([text, tdClass, colSpan]) => {
+    const td = tr.insertCell();
+    if (tdClass) td.className = tdClass;
+    if (colSpan) td.colSpan = colSpan;
+    if (text instanceof Node) td.appendChild(text);
+    else td.textContent = text;
+  });
+  trimHistory();
+}
+
+function logNote(msg) {
+  addRow([[msg, "note", 4]], "is-note");
+}
+
+function logBet(n, target, roll, win, profit) {
+  const outcome = document.createElement("span");
+  outcome.className = "outcome";
+  outcome.textContent = win ? "Win" : "Loss";
+  const profitCell = document.createDocumentFragment();
+  profitCell.append(outcome, signed(profit));
+  addRow(
+    [
+      ["#" + n],
+      [target],
+      [to2(roll)],
+      [profitCell, "profit"],
+    ],
+    win ? "is-win" : "is-loss"
+  );
+}
+
+/* ---------- Result display and the dolly ---------- */
+function showResult(roll, win, profit, fast) {
+  const result = $("#result");
+  result.dataset.state = win ? "win" : "loss";
+  $("#stat-last").textContent = to2(roll);
+  $("#result-verdict").textContent = win
+    ? `Win · ${signed(profit)} USDC`
+    : `Loss · ${signed(profit)} USDC`;
+  $("#result-detail").textContent = `Rolled ${to2(roll)}, needed ${state.over ? "over" : "under"} ${to2(state.roll)}`;
+
+  if (!fast) {
+    result.classList.remove("is-fresh");
+    void result.offsetWidth; // restart the settle animation
+    result.classList.add("is-fresh");
+  }
+
+  const dolly = $("#dolly");
+  dolly.hidden = false;
+  dolly.classList.toggle("is-win", win);
+  dolly.classList.toggle("is-loss", !win);
+  dolly.style.setProperty("--dolly-pos", (roll / 100).toFixed(4));
+  $("#dolly-tag").textContent = to2(roll);
+}
+
+function resetResult() {
+  const result = $("#result");
+  result.dataset.state = "idle";
+  result.classList.remove("is-fresh");
+  $("#result-verdict").textContent = "Place your bet";
+  $("#dolly").hidden = true;
+  updateBar();
+}
 
 /* ---------- Rolling logic ---------- */
 function isWin(roll) {
   return state.over ? roll > state.roll : roll < state.roll;
 }
 
-function log(msg, cls = "") {
-  const el = document.createElement("div");
-  el.textContent = msg;
-  el.className = "log " + cls;
-  $("#console").appendChild(el);
-  $("#console").scrollTop = $("#console").scrollHeight;
-}
-
-async function playOnce(betAmt) {
-  // Vérifier si le joueur a assez de fonds
-  if (betAmt > state.walletBalance) {
-    alert("Solde insuffisant pour cette mise !");
-    return { win: false, profit: 0 };
+async function playOnce(betAmt, fast = false) {
+  if (!(betAmt > 0)) {
+    setStatus("table-status", "Enter a bet above 0 to roll.", "error");
+    return null;
   }
+  // Check the player can cover the bet
+  if (betAmt > state.walletBalance) {
+    setStatus(
+      "table-status",
+      `Not enough balance for a ${money(betAmt)} USDC bet. Lower the bet or deposit in the Cashier tab.`,
+      "error"
+    );
+    return null;
+  }
+  setStatus("table-status", "");
 
   const roll = await getRoll();
   const win = isWin(roll);
   const profit = win ? betAmt * (state.multiplier - 1) : -betAmt;
 
-  // Mettre à jour le portefeuille
   updateWalletBalance(profit);
-
-  // Mettre à jour les séries de victoires/défaites
   updateWinLossStreaks(win);
 
   state.pl += profit;
   state.totalBets++;
   if (win) state.wins++;
   else state.losses++;
-  $("#stat-last").textContent = to2(roll);
   $("#stat-winloss").textContent = `${state.wins} / ${state.losses}`;
   $("#stat-total").textContent = state.totalBets;
-  $("#stat-balance").textContent = to2(state.pl);
-  log(
-    `Roll ${to2(roll)} — ${win ? "WIN" : "LOSE"} — ${
-      profit >= 0 ? "+" : ""
-    }${to2(profit)} USDC — Solde: ${to2(state.walletBalance)} USDC`,
-    win ? "win" : "lose"
+  setSigned($("#stat-balance"), state.pl);
+
+  showResult(roll, win, profit, fast);
+  logBet(
+    state.totalBets,
+    `${state.over ? ">" : "<"} ${to2(state.roll)}`,
+    roll,
+    win,
+    profit
   );
   return { win, profit };
 }
 
 $("#btn-roll").addEventListener("click", async () => {
-  const bet = parseFloat($("#bet").value) || 0;
+  const bet = num($("#bet").value);
   $("#btn-roll").disabled = true;
   await playOnce(bet);
-  $("#btn-roll").disabled = false;
+  $("#btn-roll").disabled = autoRunning;
 });
 
 $("#btn-clear").addEventListener("click", () => {
@@ -361,56 +479,78 @@ $("#btn-clear").addEventListener("click", () => {
   state.highestBalance = state.walletBalance;
   state.lowestBalance = state.walletBalance;
 
-  // Génère de nouvelles seeds automatiquement lors du reset
+  // New seeds on every reset
   generateNewSeeds();
-  $("#console").textContent = "";
-  $("#stat-last").textContent = "—";
+  $("#history-body").textContent = "";
+  trimHistory();
   $("#stat-winloss").textContent = "0 / 0";
   $("#stat-total").textContent = "0";
+  setSigned($("#stat-balance"), 0);
   $("#stat-balance").textContent = "0.00";
   updateWalletDisplay();
+  resetResult();
 });
 
 /* ---------- Auto Bettor ---------- */
 let autoTimer = null,
   autoRunning = false;
 
-function stopAuto() {
+function setAutoUI(running) {
+  document.body.classList.toggle("is-auto", running);
+  $("#btn-start").disabled = running;
+  $("#btn-stop").disabled = !running;
+  $("#btn-roll").disabled = running;
+}
+
+function stopAuto(reason) {
   if (autoTimer) {
     clearTimeout(autoTimer);
     autoTimer = null;
   }
+  const wasRunning = autoRunning;
   autoRunning = false;
-  $("#btn-start").disabled = false;
-  $("#btn-stop").disabled = true;
+  setAutoUI(false);
+  if (wasRunning) setStatus("auto-status", reason || "Auto-bet stopped.", reason && reason.startsWith("Stopped:") ? "error" : "");
 }
 
 async function runAuto() {
-  const baseBet = parseFloat($("#auto-bet").value) || 0;
-  const stopProfit = parseFloat($("#stop-profit").value) || 0;
-  const stopLoss = parseFloat($("#stop-loss").value) || 0;
-  const maxBets = parseInt($("#auto-count").value || 0, 10);
+  const baseBet = num($("#auto-bet").value);
+  const stopProfit = num($("#stop-profit").value);
+  const stopLoss = num($("#stop-loss").value);
+  const maxBets = Math.floor(num($("#auto-count").value));
   const onWinMode = $("#onwin-mode").value;
   const onLossMode = $("#onloss-mode").value;
-  const onWinPct = parseFloat($("#onwin-pct").value) || 0;
-  const onLossPct = parseFloat($("#onloss-pct").value) || 0;
+  const onWinPct = num($("#onwin-pct").value);
+  const onLossPct = num($("#onloss-pct").value);
+
+  if (!(baseBet > 0)) {
+    setStatus("auto-status", "Enter a base bet above 0 to start.", "error");
+    return;
+  }
 
   let bet = baseBet;
   let i = 0;
   autoRunning = true;
-  $("#btn-start").disabled = true;
-  $("#btn-stop").disabled = false;
+  setAutoUI(true);
+  setStatus("auto-status", "Auto-bet running…");
 
   const loop = async () => {
     if (!autoRunning) return;
-    if (maxBets > 0 && i >= maxBets) return stopAuto();
-    if (stopProfit > 0 && state.pl >= stopProfit) return stopAuto();
-    if (stopLoss > 0 && -state.pl >= stopLoss) return stopAuto();
+    if (maxBets > 0 && i >= maxBets) return stopAuto(`Finished ${maxBets} bets.`);
+    if (stopProfit > 0 && state.pl >= stopProfit) return stopAuto("Profit target reached.");
+    if (stopLoss > 0 && -state.pl >= stopLoss) return stopAuto("Loss limit reached.");
+
+    const speed = parseInt($("#speed").value, 10) || 250;
+    document.documentElement.style.setProperty(
+      "--dolly-ms",
+      Math.round(Math.min(650, speed * 0.8)) + "ms"
+    );
 
     i++;
-    const { win } = await playOnce(bet);
+    const res = await playOnce(bet, speed < 250);
+    if (!res) return stopAuto("Stopped: not enough balance for the next bet.");
 
-    if (win) {
+    if (res.win) {
       if (onWinMode === "increase") bet = bet * (1 + onWinPct / 100);
       else bet = baseBet;
     } else {
@@ -418,23 +558,52 @@ async function runAuto() {
       else bet = baseBet;
     }
 
-    // Utilise la vitesse sélectionnée
-    const speed = parseInt($("#speed").value) || 250;
     autoTimer = setTimeout(loop, speed);
   };
   loop();
 }
 
 $("#btn-start").addEventListener("click", runAuto);
-$("#btn-stop").addEventListener("click", stopAuto);
+$("#btn-stop").addEventListener("click", () => {
+  stopAuto();
+  document.documentElement.style.removeProperty("--dolly-ms");
+});
 
 // Wallet event listeners
 $("#btn-deposit").addEventListener("click", deposit);
 $("#btn-withdraw").addEventListener("click", withdraw);
 
+/* ---------- Tabs ---------- */
+(function () {
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function select(tab, focus) {
+    tabs.forEach((t) => {
+      const on = t === tab;
+      t.setAttribute("aria-selected", on);
+      t.tabIndex = on ? 0 : -1;
+      $("#" + t.getAttribute("aria-controls")).hidden = !on;
+    });
+    if (focus) tab.focus();
+  }
+  tabs.forEach((tab, idx) => {
+    tab.addEventListener("click", () => select(tab));
+    tab.addEventListener("keydown", (e) => {
+      let next = null;
+      if (e.key === "ArrowRight") next = tabs[(idx + 1) % tabs.length];
+      if (e.key === "ArrowLeft") next = tabs[(idx - 1 + tabs.length) % tabs.length];
+      if (e.key === "Home") next = tabs[0];
+      if (e.key === "End") next = tabs[tabs.length - 1];
+      if (next) {
+        e.preventDefault();
+        select(next, true);
+      }
+    });
+  });
+})();
+
 /* ---------- Init ---------- */
-// Génère automatiquement des seeds aléatoires au chargement
+// Draw random seeds on load
 generateNewSeeds();
 syncFromChance();
-updateBar();
 updateWalletDisplay();
+trimHistory();
